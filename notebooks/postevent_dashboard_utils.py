@@ -731,24 +731,25 @@ def get_multi_metric_selector(
             
         if variable == 'streamflow':
             metric_list = [
+            "primary_maximum",              
+            "secondary_maximum", 
+            "max_value_delta",
             "bias",
             "nash_sutcliffe_efficiency",
             "kling_gupta_efficiency",
             "mean_squared_error",
-            "root_mean_squared_error",  
-            "max_value_delta",        
+            "root_mean_squared_error",        
             "max_value_timedelta",                  
             "secondary_count",
             "primary_count",
             "secondary_average",
             "primary_average",
             "secondary_minimum",
-            "primary_minimum",            
-            "primary_maximum",              
-            "secondary_maximum",    
+            "primary_minimum",             
             "primary_max_value_time",
             "secondary_max_value_time",
             ]
+            values=["primary_maximum","secondary_maximum","max_value_delta"]
 
         elif variable == 'precipitation':
             metric_list = [
@@ -760,10 +761,11 @@ def get_multi_metric_selector(
             "secondary_variance",
             "primary_variance",        
             ] 
+            values=["primary_sum","secondary_sum"]
             
     metric_selector = pn.widgets.MultiSelect(name='Evaluation metrics', 
                                           options=metric_list, 
-                                          value=[metric_list[0]], 
+                                          value=values, 
                                           width_policy="fit")
     return metric_selector            
             
@@ -1652,7 +1654,7 @@ def build_hyetograph_from_query_selected_point(
         cross = pd.read_parquet(attribute_paths['usgs_huc_crosswalk'])
         huc12_id = cross.loc[cross['primary_location_id']==point_id, 'secondary_location_id'].iloc[0]
         huc10_id = "-".join(['huc10', huc12_id.split("-")[1][:10]])
-        title = f"{huc10_id} (Contains Gage: {point_id}) {reference_time_single} {index}"     
+        title = f"{huc10_id} (Contains Gage: {point_id})"# {reference_time_single} {index}"     
         
         df = run_teehr_query(
             query_type="timeseries",
@@ -1784,7 +1786,7 @@ def build_hydrograph_from_query_selected_point(
     if len(index) > 0 and len(points_dmap.dimensions('value')) > 0:  
         point_id = points_dmap.dimension_values('primary_location_id')[index][0]
         area = points_dmap.dimension_values('upstream_area_value')[index][0]
-        title = f"Gage ID: {point_id} {reference_time_single} {index}"
+        title = f"Gage ID: {point_id}"# {reference_time_single} {index}"
         
         df = run_teehr_query(
             query_type="timeseries",
@@ -1805,7 +1807,7 @@ def build_hydrograph_from_query_selected_point(
         
         time_start = df['value_time'].min()
         time_end = df['value_time'].max()
-        t = time_start + (time_end - time_start)*0.02
+        t = time_start + (time_end - time_start)*0.05
         text_x = t.replace(second=0, microsecond=0, minute=0)
 
         if units == 'metric':
@@ -1929,3 +1931,124 @@ def get_points_in_huc(
     gdf['northing'] = gdf.geometry.y
     
     return hv.Points(gdf, kdims = ['easting','northing'], vdims = ['id'])
+
+
+def post_event_dashboard_2(
+    scenario_definitions: List[dict],
+    scenario_selector: pn.widgets.Select,
+    huc2_selector: pn.widgets.Select,      
+    value_time_slider: pn.Column,
+    attribute_paths: dict[Path],
+    include_metrics: List[str],    
+    viz_units: str = 'metric',
+    gage_basins_gdf: Union[gpd.GeoDataFrame, None] = None
+) -> pn.Column:
+    
+    metric_selector = get_single_metric_selector(
+        metrics = get_metric_selector_dict(metrics=include_metrics))
+    scenarios = get_scenario(scenario_definitions, scenario_name=scenario_selector.value)
+    scenario_text = get_scenario_text(scenario_selector.value)
+    streamflow_scenario = [s for s in scenarios if s['variable']=='streamflow'][0]
+    precip_scenario = [s for s in scenarios if s['variable']=='precipitation'][0]
+
+    # reference time player (eventually replace with individual arrows)
+    reference_time_player = get_reference_time_player_selected_dates(
+        scenario=scenarios, 
+        start=value_time_slider[1].value_start-timedelta(hours=1), 
+        end=value_time_slider[1].value_end
+    )
+    current_ref_time = pn.bind(get_reference_time_text, reference_time=reference_time_player.param.value)
+
+    # Some universal plot settings
+    map_opts = dict(show_grid=False, show_legend=False, xaxis = None, yaxis = None, width=600, height=500)
+    ts_opts = dict(toolbar = None, tools=["hover"], show_title = False)
+
+    # Build background map Elements
+    tiles_background = gv.tile_sources.CartoLight #OSM
+    timeseries_legend = get_separate_legend()
+
+    # link widgets to query and build points element
+    points_bind = pn.bind(
+        build_points_from_query,
+        scenario = streamflow_scenario,
+        huc_id=huc2_selector.param.value,
+        value_time_start=value_time_slider[1].param.value_start,
+        value_time_end=value_time_slider[1].param.value_end,
+        reference_time_single=reference_time_player.param.value,
+        #value_min=0,   
+        group_by=['primary_location_id','reference_time'],    
+        include_metrics=include_metrics,#['primary_maximum','max_value_delta','max_value_timedelta'],    
+        #metric_limits=dict(primary_maximum=(0.1, 10e6)),
+        plot_metric=metric_selector.param.value,
+        attribute_paths=attribute_paths,
+        units=viz_units,
+    )
+    points_dmap = hv.DynamicMap(points_bind)
+
+    # Define stream source as points selection from points_dmap
+    point_selection = hv.streams.Selection1D(source=points_dmap)#, index=[0])
+
+    gage_basin_bind = pn.bind(
+        get_gage_basin_selected_point,
+        index=point_selection.param.index,
+        points_dmap = points_dmap,  
+        gage_basins_gdf = gage_basins_gdf,
+        )
+    gage_basin_dmap = hv.DynamicMap(gage_basin_bind)
+    #gage_basin_dmap.opts(line_color='k', line_width=2, fill_alpha=0)
+
+    # link selected point to query and build timeseries element
+    hyetograph_bind = pn.bind(
+        build_hyetograph_from_query_selected_point,
+        index=point_selection.param.index,
+        points_dmap = points_dmap,          
+        scenario = precip_scenario,
+        reference_time_single=reference_time_player.param.value,
+        value_min=0,     
+        attribute_paths=attribute_paths,
+        units=viz_units,
+        opts = dict(ts_opts, xaxis = None, height=120, width=600),
+    )
+    hydrograph_bind = pn.bind(
+        build_hydrograph_from_query_selected_point,
+        index=point_selection.param.index,
+        points_dmap = points_dmap,          
+        scenario = streamflow_scenario,
+        reference_time_single=reference_time_player.param.value,  #.value
+        value_min=0,     
+        attribute_paths=attribute_paths,
+        units=viz_units,
+        opts = dict(ts_opts, height=220, width=600),
+    )
+    
+    ###### Apply styles 
+
+    tiles_background.opts(**map_opts)
+    points_dmap.opts(**map_opts, tools=['hover','tap'], colorbar=True, size=5, 
+                     toolbar='above', selection_line_width=5, nonselection_line_width=0, nonselection_alpha=0.5)
+
+    ###### Panel header
+
+    header = pn.Row(
+                pn.pane.PNG('https://ciroh.ua.edu/wp-content/uploads/2022/08/CIROHLogo_200x200.png', width=60),
+                pn.pane.HTML(f"CIROH Tools for Exploratory Evaluation in Hydrology Research (TEEHR) \
+                             ----Example 1: Forecast Data Exploration<br> - {scenario_text}", 
+                             sizing_mode="stretch_width", style={'font-size': '18px', 'font-weight': 'bold'}),
+    )
+    # Build the Panel layout
+    layout = \
+        pn.Column(
+            pn.Column(pn.Spacer(height=10), header, width=1100),
+            pn.Row(
+                pn.Column(pn.Spacer(height=20), metric_selector),
+                pn.Spacer(width=70),
+                pn.Column(current_ref_time, reference_time_player),
+                pn.Spacer(width=90), timeseries_legend,
+            ),
+            pn.Row(
+                tiles_background*points_dmap*gage_basin_dmap, 
+                pn.Column(hyetograph_bind, hydrograph_bind),
+             )
+    )
+    
+    return layout
