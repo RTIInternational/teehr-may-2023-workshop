@@ -609,6 +609,17 @@ def get_value_time_slider_selected_scenario_name(
     return value_time_slider
 
 
+def get_date_range_by_scenario(
+    scenario: dict,
+    date_type: str = "value_time",
+) -> tuple:
+    
+    pathlist=[scenario["primary_filepath"], scenario["secondary_filepath"]]
+    range_start, range_end = get_parquet_date_range_across_scenarios(pathlist, date_type = date_type)
+    
+    return range_start, range_end
+
+
 def get_date_range_slider_with_range_as_title(
     pathlist: List[Path] = [],
     date_type: str = "value_time",
@@ -847,28 +858,66 @@ def get_threshold_selector(variable: str = 'streamflow') -> pn.widgets.Select:
 
 def get_filter_widgets(
     scenario: dict = {},
-) -> List:
+    include_widgets: List[str] = None
+) -> dict:
     
-    #value_time_slider = get_value_time_slider(scenario)
+    return_widgets = {}
+    if 'value_time' in include_widgets:
+        value_time_slider = get_date_range_slider_with_range_as_title(
+            pathlist=[scenario["primary_filepath"], scenario["secondary_filepath"]],
+            date_type='value_time', 
+            opts = dict(width = 700, bar_color = "green", step=3600000)
+        )
+        return_widgets['value_time'] = value_time_slider
+        
+    if 'reference_time' in include_widgets:    
+        reference_time_slider = get_date_range_slider_with_range_as_title(
+            pathlist=[scenario["primary_filepath"], scenario["secondary_filepath"]],
+            date_type='reference_time',
+            opts = dict(width = 700, bar_color = "red", step=3600000*6)
+        )
+        return_widgets['reference_time'] = reference_time_slider
+
+    if 'lead_time' in include_widgets:         
+        lead_time_selector = get_lead_time_selector()
+        return_widgets['lead_time'] = lead_time_selector
+        
+    if 'huc2' in include_widgets: 
+        huc2_selector = get_huc2_selector()
+        return_widgets['huc2'] = huc2_selector
+        
+    if 'stream_order' in include_widgets:
+        order_limit_selector = get_order_limit_selector()
+        return_widgets['stream_order'] = order_limit_selector
+        
+    if 'threshold' in include_widgets:        
+        threshold_selector = get_threshold_selector(scenario['variable'])
+        return_widgets['threshold'] = threshold_selector
+        
+    if 'metrics' in include_widgets:
+        metric_selector = get_multi_metric_selector(scenario['variable'])    
+        return_widgets['metrics'] = metric_selector
+        
+    return return_widgets
+
+
+def get_widgets_by_scenario(
+    scenario_definitions: dict = {},
+    scenario_name: Union[str, None] = None,
+    variable: Union[str, None] = None,
+    include_widgets: List[str] = None
+) -> pn.Column:
     
-    value_time_slider = get_date_range_slider_with_range_as_title(
-        pathlist=[scenario["primary_filepath"], scenario["secondary_filepath"]],
-        date_type='value_time', 
-        opts = dict(width = 700, bar_color = "green", step=3600000)
-    )
-    reference_time_slider = get_date_range_slider_with_range_as_title(
-        pathlist=[scenario["primary_filepath"], scenario["secondary_filepath"]],
-        date_type='reference_time',
-        opts = dict(width = 700, bar_color = "red", step=3600000*6)
-    )
-    lead_time_selector = get_lead_time_selector()
-    huc2_selector = get_huc2_selector()
-    order_limit_selector = get_order_limit_selector()
-    threshold_selector = get_threshold_selector(scenario['variable'])
-    metric_selector = get_multi_metric_selector(scenario['variable'])    
-    
-    return [value_time_slider, reference_time_slider, lead_time_selector, huc2_selector, 
-            threshold_selector, order_limit_selector, metric_selector]
+    scenario = get_scenario(scenario_definitions, scenario_name=scenario_name, variable=variable)
+            
+    return_widgets = {}            
+    if scenario is None:
+        print('add error catch')       
+    else:
+        return_widgets = get_filter_widgets(scenario, include_widgets)
+        
+    return return_widgets
+
 
 ##############################################  attributes
 
@@ -910,6 +959,11 @@ def merge_attr_to_gdf(
     gdf = gdf.merge(attr_df[['location_id'] + value_columns], 
                      left_on='primary_location_id', right_on='location_id')
     gdf = gdf.drop('location_id', axis=1)
+    
+    #remove 'value' from column header
+    for col in value_columns:
+        newcol = col.replace('_value','')
+        gdf = gdf.rename(columns = {col: newcol})
     
     return gdf
 
