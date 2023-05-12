@@ -15,7 +15,7 @@ import geoviews as gv
 import cartopy.crs as ccrs
 import colorcet as cc
 import datashader as ds
-from bokeh.models import Range1d, LinearAxis
+from bokeh.models import Range1d, LinearAxis, DatetimeTickFormatter
 
 '''
 misc utilities for TEEHR dashboards
@@ -609,6 +609,17 @@ def get_value_time_slider_selected_scenario_name(
     return value_time_slider
 
 
+def get_date_range_by_scenario(
+    scenario: dict,
+    date_type: str = "value_time",
+) -> tuple:
+    
+    pathlist=[scenario["primary_filepath"], scenario["secondary_filepath"]]
+    range_start, range_end = get_parquet_date_range_across_scenarios(pathlist, date_type = date_type)
+    
+    return range_start, range_end
+
+
 def get_date_range_slider_with_range_as_title(
     pathlist: List[Path] = [],
     date_type: str = "value_time",
@@ -739,17 +750,18 @@ def get_multi_metric_selector(
             "kling_gupta_efficiency",
             "mean_squared_error",
             "root_mean_squared_error",        
-            "max_value_timedelta",                  
+            "max_value_timedelta",     
+            "primary_max_value_time",
+            "secondary_max_value_time"  ,              
             "secondary_count",
             "primary_count",
             "secondary_average",
             "primary_average",
             "secondary_minimum",
             "primary_minimum",             
-            "primary_max_value_time",
-            "secondary_max_value_time",
             ]
-            values=["primary_maximum","secondary_maximum","max_value_delta"]
+            values=["primary_maximum","secondary_maximum","max_value_delta", 
+                    "primary_max_value_time", "secondary_max_value_time", "max_value_timedelta"]
 
         elif variable == 'precipitation':
             metric_list = [
@@ -847,28 +859,66 @@ def get_threshold_selector(variable: str = 'streamflow') -> pn.widgets.Select:
 
 def get_filter_widgets(
     scenario: dict = {},
-) -> List:
+    include_widgets: List[str] = None
+) -> dict:
     
-    #value_time_slider = get_value_time_slider(scenario)
+    return_widgets = {}
+    if 'value_time' in include_widgets:
+        value_time_slider = get_date_range_slider_with_range_as_title(
+            pathlist=[scenario["primary_filepath"], scenario["secondary_filepath"]],
+            date_type='value_time', 
+            opts = dict(width = 700, bar_color = "green", step=3600000)
+        )
+        return_widgets['value_time'] = value_time_slider
+        
+    if 'reference_time' in include_widgets:    
+        reference_time_slider = get_date_range_slider_with_range_as_title(
+            pathlist=[scenario["primary_filepath"], scenario["secondary_filepath"]],
+            date_type='reference_time',
+            opts = dict(width = 700, bar_color = "red", step=3600000*6)
+        )
+        return_widgets['reference_time'] = reference_time_slider
+
+    if 'lead_time' in include_widgets:         
+        lead_time_selector = get_lead_time_selector()
+        return_widgets['lead_time'] = lead_time_selector
+        
+    if 'huc2' in include_widgets: 
+        huc2_selector = get_huc2_selector()
+        return_widgets['huc2'] = huc2_selector
+        
+    if 'stream_order' in include_widgets:
+        order_limit_selector = get_order_limit_selector()
+        return_widgets['stream_order'] = order_limit_selector
+        
+    if 'threshold' in include_widgets:        
+        threshold_selector = get_threshold_selector(scenario['variable'])
+        return_widgets['threshold'] = threshold_selector
+        
+    if 'metrics' in include_widgets:
+        metric_selector = get_multi_metric_selector(scenario['variable'])    
+        return_widgets['metrics'] = metric_selector
+        
+    return return_widgets
+
+
+def get_widgets_by_scenario(
+    scenario_definitions: dict = {},
+    scenario_name: Union[str, None] = None,
+    variable: Union[str, None] = None,
+    include_widgets: List[str] = None
+) -> pn.Column:
     
-    value_time_slider = get_date_range_slider_with_range_as_title(
-        pathlist=[scenario["primary_filepath"], scenario["secondary_filepath"]],
-        date_type='value_time', 
-        opts = dict(width = 700, bar_color = "green", step=3600000)
-    )
-    reference_time_slider = get_date_range_slider_with_range_as_title(
-        pathlist=[scenario["primary_filepath"], scenario["secondary_filepath"]],
-        date_type='reference_time',
-        opts = dict(width = 700, bar_color = "red", step=3600000*6)
-    )
-    lead_time_selector = get_lead_time_selector()
-    huc2_selector = get_huc2_selector()
-    order_limit_selector = get_order_limit_selector()
-    threshold_selector = get_threshold_selector(scenario['variable'])
-    metric_selector = get_multi_metric_selector(scenario['variable'])    
-    
-    return [value_time_slider, reference_time_slider, lead_time_selector, huc2_selector, 
-            threshold_selector, order_limit_selector, metric_selector]
+    scenario = get_scenario(scenario_definitions, scenario_name=scenario_name, variable=variable)
+            
+    return_widgets = {}            
+    if scenario is None:
+        print('add error catch')       
+    else:
+        return_widgets = get_filter_widgets(scenario, include_widgets)
+        
+    return return_widgets
+
 
 ##############################################  attributes
 
@@ -910,6 +960,11 @@ def merge_attr_to_gdf(
     gdf = gdf.merge(attr_df[['location_id'] + value_columns], 
                      left_on='primary_location_id', right_on='location_id')
     gdf = gdf.drop('location_id', axis=1)
+    
+    #remove 'value' from column header
+    for col in value_columns:
+        newcol = col.replace('_value','')
+        gdf = gdf.rename(columns = {col: newcol})
     
     return gdf
 
@@ -1140,7 +1195,7 @@ def convert_attr_to_viz_units(
 
 def get_normalized_streamflow(
     df: Union[pd.DataFrame, gpd.GeoDataFrame],
-    area_col: str = 'upstream_area_value',
+    area_col: str = 'upstream_area',
     include_metrics: Union[List[str], None] = None,
     units: str = 'metric',
 ) -> Union[pd.DataFrame, gpd.GeoDataFrame]:
@@ -1182,41 +1237,117 @@ def get_flow_metrics(metric_list: Union[List[str], None]) -> List[str]:
 def get_metric_dict(
     metric: str,
     scenario_name: Union[str, None] = None,
+    units: str = 'metric',
 ) -> dict:
 
-    if scenario_name == 'short_range':
-        duration = 18
-    elif scenario_name == 'medium_range':
-        duration = 240
-    else:
-        duration = 240
+    duration = 240
+    if metric in ['max_time_diff']:
+        if scenario_name is not None:
+            if scenario_name == 'short_range':
+                duration = 18
+            elif scenario_name == 'medium_range':
+                duration = 240
+        #else:
+            #print(f"add error catch... scenario name required for metric {metric}")
     
+    if units == 'metric':
+        area_unit = '(km^2)'
+        flow_unit = '(cms)'
+        pcpn_unit = '(mm)'
+    else:
+        area_unit = '(mi^2)'
+        flow_unit = '(cfs)'
+        pcpn_unit = '(in)'
     
     metric_dicts = dict(
         max_perc_diff = dict(
             label="Peak Error (%)",
+            unit='%',
+            histlims=(-100, 1000),
+            sort_ascending=True,
             color_opts=dict(
-                cmap=cc.CET_D1A[::-1],
                 cnorm='linear',
-                clim=(-100,100)
+                clim=(-100,100),
+                cmap=cc.CET_D1A[::-1], 
             )
         ),
         max_time_diff = dict(
             label="Peak Timing Error (hrs)",
+            unit='hours',
+            histlims=(-duration,duration),
+            sort_ascending=True,            
             color_opts=dict(        
-                cmap=cc.CET_D1A[::-1],
                 cnorm='linear',
                 clim=(-duration,duration),
+                cmap=cc.CET_D1A[::-1],  
+            )
+        ),
+        stream_order = dict(
+            label="Stream Order",
+            unit=None,
+            histlims=(1,7),
+            sort_ascending=False,
+            color_opts=dict(
+                clim=(1,7),
+                cnorm='linear',
+                cmap=cc.rainbow,
+            )
+        ),
+        # ecoregion_num = dict(
+        #     label="Ecoregion",
+        #     unit=None,
+        #     color_opts=dict(
+        #         clim=(None,None),
+        #         cnorm='linear',
+        #         cmap=cc.rainbow,    
+        #         sort_ascending=True,
+        #     )
+        # ),
+        ecoregion_int = dict(
+            label="Ecoregion (Level II)",
+            unit=None,
+            histlims=(None,None),
+            sort_ascending=False,
+            color_opts=dict(
+                clim=(None,None),
+                cnorm='linear',
+                cmap=cc.rainbow,
+            )
+        ),
+        upstream_area = dict(
+            label="".join(["Drainage Area ", area_unit]),
+            unit=area_unit,
+            histlims=(0,None),
+            sort_ascending=True,
+            color_opts=dict(
+                clim=(0,None),
+                cnorm='linear',
+                cmap=cc.rainbow,    
+            )
+        ),
+        latitude = dict(
+            label="Latitude",
+            unit='decimal degree',
+            histlims=(None,None),
+            sort_ascending=False,
+            color_opts=dict(
+                clim=(None,None),
+                cnorm='linear',
+                cmap=cc.rainbow,  
             )
         )
     )
     return metric_dicts[metric]
     
     
-def get_metric_selector_dict(metrics: List[str]) -> dict:
+def get_metric_selector_dict(
+    metrics: List[str],
+    scenario_name: Union[str, None] = None,
+) -> dict:
+    
     metric_selector_dict = {}
     for metric in metrics:
-        metric_dict = get_metric_dict(metric)    
+        metric_dict = get_metric_dict(metric,scenario_name)    
         metric_selector_dict[metric_dict['label']] = metric
     return metric_selector_dict
     
@@ -1416,7 +1547,7 @@ def build_points_dmap_from_query(
     gdf = merge_attr_to_gdf(gdf, attribute_df)
     
     # temporary - to be generalized
-    include_metrics = include_metrics + ['upstream_area_value','ecoregion_L2_value','stream_order_value']    
+    include_metrics = include_metrics + ['upstream_area','ecoregion_L2','stream_order']    
     
     if 'max_perc_diff' in include_metrics:
         gdf['max_perc_diff'] = gdf['max_value_delta']/gdf['primary_maximum']*100
@@ -1445,7 +1576,7 @@ def build_points_dmap_from_query(
 #     #vdim_metrics = list(set(include_metrics + norm_metrics))
 #     vdims = [(plot_metric, metric_dict['label']),
 #              ('primary_location_id','id'),
-#              ('upstream_area_value','drainage_area')]
+#              ('upstream_area','drainage_area')]
 #     kdims = ['easting','northing']    
         
 #     points = hv.Points(df, kdims=kdims, vdims=vdims)#.redim.range(
@@ -1468,7 +1599,7 @@ def create_points(df, plot_metric, scenario):
         metric_dict = get_metric_dict(vdims[0][0], scenario_name=scenario['scenario_name'])  
     vdims = [(plot_metric, metric_dict['label']),
              ('primary_location_id','id'),
-             ('upstream_area_value','drainage_area')]
+             ('upstream_area','drainage_area')]
     kdims = ['easting','northing']    
     points = hv.Points(df, kdims=kdims, vdims=vdims)    
     
@@ -1532,7 +1663,7 @@ def build_points_from_query(
     gdf = merge_attr_to_gdf(gdf, attribute_df)
     
     # temporary - to be generalized
-    include_metrics = include_metrics + ['upstream_area_value','ecoregion_L2_value','stream_order_value']    
+    include_metrics = include_metrics + ['upstream_area','ecoregion_L2','stream_order']    
     
     if 'max_perc_diff' in include_metrics:
         gdf['max_perc_diff'] = gdf['max_value_delta']/gdf['primary_maximum']*100
@@ -1554,6 +1685,8 @@ def build_points_from_query(
     df = gdf.loc[:,[c for c in gdf.columns if c!='geometry']] 
     df['easting']=gdf.to_crs("EPSG:3857").geometry.x
     df['northing']=gdf.to_crs("EPSG:3857").geometry.y
+    # xlim=(df['easting'].min(), df['easting'].max())
+    # ylim=(df['northing'].min(), df['northing'].max())
     
     if plot_metric is not None:
         metric_dict = get_metric_dict(plot_metric, scenario_name=scenario['scenario_name'])
@@ -1564,13 +1697,14 @@ def build_points_from_query(
     #vdim_metrics = list(set(include_metrics + norm_metrics))
     vdims = [(plot_metric, metric_dict['label']),
              ('primary_location_id','id'),
-             ('upstream_area_value','drainage_area')]
+             ('upstream_area','drainage_area')]
     kdims = ['easting','northing']    
         
     points = hv.Points(df, kdims=kdims, vdims=vdims)
-    points = points.opts(color=hv.dim(plot_metric), **metric_dict['color_opts'], title=metric_dict['label'])#, hooks=[update_map_extents])  
+    points = points.opts(color=hv.dim(plot_metric), **metric_dict['color_opts'], title=metric_dict['label'], hooks=[update_map_extents])  
+                         #xlim=xlim, ylim=ylim) 
     
-    return points
+    return points.opts(framewise=True)
 
 
 def build_polygons_from_query(
@@ -1785,7 +1919,7 @@ def build_hydrograph_from_query_selected_point(
     
     if len(index) > 0 and len(points_dmap.dimensions('value')) > 0:  
         point_id = points_dmap.dimension_values('primary_location_id')[index][0]
-        area = points_dmap.dimension_values('upstream_area_value')[index][0]
+        area = points_dmap.dimension_values('upstream_area')[index][0]
         title = f"Gage ID: {point_id}"# {reference_time_single} {index}"
         
         df = run_teehr_query(
@@ -1933,10 +2067,175 @@ def get_points_in_huc(
     return hv.Points(gdf, kdims = ['easting','northing'], vdims = ['id'])
 
 
+def get_histogram(
+    df: pd.DataFrame, 
+    column: str,
+    scenario_name: str = 'medium_range',
+    units: str = 'metric',
+    nbins: int = 50,
+    opts: dict = {},
+) -> hv.Histogram:
+
+    variable_dict = get_metric_dict(metric=column, scenario_name=scenario_name, units=units)   
+    label = variable_dict['label']
+    lims = variable_dict['histlims']
+    
+    if lims == (None, None):
+        lims = (df[column].min(), df[column].max())
+    elif lims[0] is None:
+        lims = (df[column].min(), lims[1])
+    elif lims[1] is None:
+        lims = (lims[0], df[column].max())
+
+    hist = df.hvplot.hist(y=column, bins=nbins, bin_range=lims, xlabel=label)
+
+    return hist.opts(**opts)
+
+def get_categorical_histogram(
+    df: pd.DataFrame(),
+    column: str,
+    scenario_name: str = 'medium_range',
+    units: str = 'metric',
+    labels: Union[List[str],None] = None, 
+    opts: dict = {},
+) -> hv.Histogram:
+    
+    variable_dict = get_metric_dict(metric=column, scenario_name=scenario_name, units=units)   
+    label = variable_dict['label']
+  
+    nbins=len(df[column].unique())
+    frequencies, edges = np.histogram(df[column], nbins)
+    centers = list(edges[:-1] + (edges[1:] - edges[:-1])/2)
+    if labels is None:
+        labels = list(range(1,nbins+1))
+    hist = df.hvplot.hist(y=column, bins=nbins, xlabel=label)
+    hist = hist.opts(**opts, xticks=[(centers[i], labels[i]) for i in range(0,nbins)])
+    
+    return hist
+
+
+def get_diag_line(
+    df: pd.DataFrame, 
+    scatter_variable: str,
+) -> hv.Curve:
+    
+    if scatter_variable == 'Peak Flow':
+        maxpeak = max(df['primary_maximum'].max(), df['secondary_maximum'].max())
+        lims=[maxpeak*-0.1,maxpeak*1.1]
+    elif scatter_variable == 'Peak Time':   
+        mintime = min(df['primary_max_value_time'].min(), df['secondary_max_value_time'].min())
+        maxtime = max(df['primary_max_value_time'].max(), df['secondary_max_value_time'].max())
+        dt = (maxtime - mintime)*0.1
+        lims=[mintime - dt, maxtime + dt]          
+        
+    return hv.Curve((lims,lims)).opts(color="lightgray", alpha=0.5)        
+
+    
+def get_scatter(
+    df: pd.DataFrame, 
+    scatter_variable: str,
+    color_variable: str,
+    scenario_name: str = 'medium_range',
+    units: str = 'metric',
+    opts: dict = {},
+) -> hv.Scatter:
+    
+    color_variable_dict = get_metric_dict(metric=color_variable, scenario_name=scenario_name, units=units)    
+    
+    clim = color_variable_dict['color_opts']['clim']
+    cnorm = color_variable_dict['color_opts']['cnorm']
+    cmap = color_variable_dict['color_opts']['cmap']
+    csort = color_variable_dict['sort_ascending']    
+    clabel = color_variable_dict['label']
+
+    if clim == (None, None):
+        clim = (df[color_variable].min(), df[color_variable].max())
+    elif clim[0] is None:
+        clim = (df[color_variable].min(), clim[1])
+    elif clim[1] is None:
+        clim = (clim[0], df[color_variable].max())
+        
+    # if categorical attribute, get colormap subset
+    if color_variable in ['ecoregion_int', 'stream_order']:
+        ncats = df[color_variable].nunique()
+        cstep = int(np.floor(len(cmap) / ncats))
+        cmap = [cmap[cstep * t] for t in range(0,ncats)]
+        
+    df = df.sort_values(color_variable, ascending=csort)
+    
+    if scatter_variable == 'Peak Flow':
+        kdims=['primary_maximum']
+        vdims=['secondary_maximum'] + [c for c in df.columns if c not in ['primary_maximum','secondary_maximum']]
+        if units == 'metric':
+            unit = '(cms)'
+        else:
+            unit = '(cfs)'
+        xlabel='Observed Peak ' + unit 
+        ylabel='Forecast Peak ' + unit
+        maxpeak = max(df['primary_maximum'].max(), df['secondary_maximum'].max())
+        lims=(maxpeak*-0.1,maxpeak*1.1)      
+        formatter='%f'
+        
+        
+    elif scatter_variable == 'Peak Time':
+        kdims=['primary_max_value_time']
+        vdims=['secondary_max_value_time'] + [c for c in df.columns if c not in ['primary_max_value_time','secondary_max_value_time']] 
+        xlabel='Observed Peak Time'
+        ylabel='Forecast Peak Time'
+        mintime = min(df['primary_max_value_time'].min(), df['secondary_max_value_time'].min())
+        maxtime = max(df['primary_max_value_time'].max(), df['secondary_max_value_time'].max())
+        dt = (maxtime - mintime)*0.1
+        lims=(mintime - dt, maxtime + dt)  
+        formatter=DatetimeTickFormatter(months=["%b %d"])
+    
+    scatter = hv.Scatter(df, kdims=kdims, vdims=vdims).opts(**opts,
+        color=color_variable, cmap=cmap, cnorm=cnorm, clim=clim, clabel=clabel, 
+        ylim=lims, xlim=lims, xlabel=xlabel, ylabel=ylabel, xformatter=formatter, yformatter=formatter)
+    
+    return scatter.opts(framewise=True)
+
+def get_points(
+    df: pd.DataFrame, 
+    color_variable: str,
+    scenario_name: str = 'medium_range',
+    units: str = 'metric',
+    opts: dict = {},
+) -> hv.Points: 
+    
+    color_variable_dict = get_metric_dict(metric=color_variable, scenario_name=scenario_name, units=units)
+    
+    clim = color_variable_dict['color_opts']['clim']
+    cnorm = color_variable_dict['color_opts']['cnorm']
+    cmap = color_variable_dict['color_opts']['cmap']
+    csort = color_variable_dict['sort_ascending']    
+    clabel = color_variable_dict['label']
+
+    if clim == (None, None):
+        clim = (df[color_variable].min(), df[color_variable].max())
+    elif clim[0] is None:
+        clim = (df[color_variable].min(), clim[1])
+    elif clim[1] is None:
+        clim = (clim[0], df[color_variable].max())
+        
+    # if categorical attribute, get colormap subset
+    if color_variable in ['ecoregion_int', 'stream_order']:
+        ncats = df[color_variable].nunique()
+        cstep = int(np.floor(len(cmap) / ncats))
+        cmap = [cmap[cstep * t] for t in range(0,ncats)]
+    
+    vdims=[c for c in df.columns if c not in ['easting','northing']] 
+    
+    points = hv.Points(df, kdims=['easting','northing'], vdims=vdims).opts(**opts,
+        color=hv.dim(color_variable), cmap=cmap, cnorm=cnorm,  clim=clim, colorbar=True, clabel=clabel,
+        size=5, xaxis=None, yaxis=None, tools=['hover'])
+                       
+    return points
+
+
 def post_event_dashboard_2(
     scenario_definitions: List[dict],
     scenario_selector: pn.widgets.Select,
-    huc2_selector: pn.widgets.Select,      
+    #huc2_selector: pn.widgets.Select,      
     value_time_slider: pn.Column,
     attribute_paths: dict[Path],
     include_metrics: List[str],    
@@ -1944,6 +2243,7 @@ def post_event_dashboard_2(
     gage_basins_gdf: Union[gpd.GeoDataFrame, None] = None
 ) -> pn.Column:
     
+    huc2_selector = get_huc2_selector()
     metric_selector = get_single_metric_selector(
         metrics = get_metric_selector_dict(metrics=include_metrics))
     scenarios = get_scenario(scenario_definitions, scenario_name=scenario_selector.value)
@@ -2032,7 +2332,7 @@ def post_event_dashboard_2(
     header = pn.Row(
                 pn.pane.PNG('https://ciroh.ua.edu/wp-content/uploads/2022/08/CIROHLogo_200x200.png', width=60),
                 pn.pane.HTML(f"CIROH Tools for Exploratory Evaluation in Hydrology Research (TEEHR) \
-                             ----Example 1: Forecast Data Exploration<br> - {scenario_text}", 
+                             ----Example 2: Explore by Reference Time<br> - {scenario_text}", 
                              sizing_mode="stretch_width", style={'font-size': '18px', 'font-weight': 'bold'}),
     )
     # Build the Panel layout
@@ -2040,10 +2340,11 @@ def post_event_dashboard_2(
         pn.Column(
             pn.Column(pn.Spacer(height=10), header, width=1100),
             pn.Row(
-                pn.Column(pn.Spacer(height=20), metric_selector),
-                pn.Spacer(width=70),
+                pn.Column(pn.Spacer(height=20), metric_selector, width=200),
+                pn.Column(pn.Spacer(height=20), huc2_selector, width=200),
+                pn.Spacer(width=40),
                 pn.Column(current_ref_time, reference_time_player),
-                pn.Spacer(width=90), timeseries_legend,
+                pn.Spacer(width=40), timeseries_legend,
             ),
             pn.Row(
                 tiles_background*points_dmap*gage_basin_dmap, 
@@ -2052,3 +2353,17 @@ def post_event_dashboard_2(
     )
     
     return layout
+
+    
+def get_dashboard_header(subtitle: str) -> pn.Row:
+    
+    header = pn.Row(
+            pn.pane.PNG('https://ciroh.ua.edu/wp-content/uploads/2022/08/CIROHLogo_200x200.png', width=60),
+            pn.pane.HTML(f"CIROH Tools for Exploratory Evaluation in Hydrology Research (TEEHR) \
+                         ----{subtitle}", 
+                         sizing_mode="stretch_width", style={'font-size': '18px', 'font-weight': 'bold'}),
+    )
+    return header
+    
+
+         
