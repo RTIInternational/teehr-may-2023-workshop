@@ -2235,7 +2235,7 @@ def get_points(
 def post_event_dashboard_2(
     scenario_definitions: List[dict],
     scenario_selector: pn.widgets.Select,
-    huc2_selector: pn.widgets.Select,      
+    #huc2_selector: pn.widgets.Select,      
     value_time_slider: pn.Column,
     attribute_paths: dict[Path],
     include_metrics: List[str],    
@@ -2243,6 +2243,7 @@ def post_event_dashboard_2(
     gage_basins_gdf: Union[gpd.GeoDataFrame, None] = None
 ) -> pn.Column:
     
+    huc2_selector = get_huc2_selector()
     metric_selector = get_single_metric_selector(
         metrics = get_metric_selector_dict(metrics=include_metrics))
     scenarios = get_scenario(scenario_definitions, scenario_name=scenario_selector.value)
