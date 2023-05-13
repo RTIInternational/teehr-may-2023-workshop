@@ -2024,28 +2024,20 @@ def build_rose_diagram_from_query_selected_point(
     opts = {},
 ) -> hv.Points:
     
-    with open('log_test.txt', 'a') as f:
-        f.write(''.join(str(e) for e in index))
-        f.write('\n')
-        
-    # print("Biginning of build_rose_diagram_from_query_selected_point")
-
     # hv.extension('bokeh','matplotlib')
     # hv.extension('bokeh')
     hv.extension('matplotlib')
     
     theta = np.linspace(0, 2 * np.pi, len(include_metrics)+1)
-    with open('log_test.txt', 'a') as f:
+    with open('/tmp/log_test.txt', 'a') as f:
         f.write(' '.join(str(e) for e in theta))  
         f.write('\n')    
     xticks = [ (theta[i], include_metrics[i]) for i in range(len(theta)-1)] 
-    with open('log_test.txt', 'a') as f:
+    with open('/tmp/log_test.txt', 'a') as f:
         f.write(' '.join(str(e) for e in xticks))  
         f.write('\n')    
 
     if len(index) > 0 and len(points_dmap.dimensions('value')) > 0:  
-        with open('log_test.txt', 'a') as f:
-            f.write('1111111111111111111111111111\n') 
         point_id = points_dmap.dimension_values('primary_location_id')[index][0]
         area = points_dmap.dimension_values('upstream_area_value')[index][0]
         title = f"Gage ID: {point_id}"
@@ -2077,9 +2069,6 @@ def build_rose_diagram_from_query_selected_point(
         )
         # df2 = convert_query_to_viz_units(df2, units, 'streamflow') 
 
-        with open('log_test.txt', 'a') as f:
-            f.write('aaaaaaaaaaaaaaaaaaaa\n') 
-     
         if units == 'metric':
             unit_label = 'cms'
             unit_norm_label = 'mm/hr'
@@ -2095,42 +2084,19 @@ def build_rose_diagram_from_query_selected_point(
         r1 = df1[include_metrics].values.flatten()
         r2 = df2[include_metrics].values.flatten()
         
-        with open('log_test.txt', 'a') as f:
-            f.write('bbbbbbbbbbbbbbbbbbbbbbbbb\n') 
-
         df_comb = pd.DataFrame([r1, r2], columns = include_metrics)
-        
-        with open('log_test.txt', 'a') as f:
-            f.write('ccccccccccccccccccccc\n') 
- 
         df_norm = df_comb.abs()/df_comb.abs().max()
         
-        # with open('log_test.txt', 'a') as f:
-        #     f.write('222222222222222222222222222\n') 
-        #     f.write(' '.join(str(e) for e in r1))
-        #     f.write('\n')
-        #     f.write(' '.join(str(e) for e in r2))
-        #     f.write('\n')
-        
-        with open('log_test.txt', 'a') as f:
+        with open('/tmp/log_test.txt', 'a') as f:
             f.write(' '.join(str(e) for e in df_norm.loc[0,:].values))  
             f.write('\n')
             f.write(' '.join(str(e) for e in df_norm.loc[1,:].values))  
             f.write('\n')
                 
-        # scatter1 = hv.Curve((theta, r1), 'theta', 'r').redim(r=dict(range=(0,100))).opts(
-        #     # alpha=0.75, projection='polar', xticks=xticks, show_grid=True)
-        #     alpha=0.75, projection='polar', xticks=xticks, show_grid=True, backend='matplotlib')
         scatter1 = hv.Curve((theta[:-1], df_norm.loc[0,:].values), 'theta', 'r').redim(r=dict(range=(0,1))).opts(
             alpha=0.75, projection='polar', xticks=xticks, show_grid=True)
-            # alpha=0.75, projection='polar', xticks=xticks, show_grid=True, backend='matplotlib')
-
-        # scatter2 = hv.Curve((theta, r2), 'theta', 'r').redim(r=dict(range=(0,100))).opts(
-        #     # alpha=0.75, projection='polar', xticks=xticks, show_grid=True)
-        #     alpha=0.75, projection='polar', xticks=xticks, show_grid=True, backend='matplotlib')
         scatter2 = hv.Curve((theta[:-1], df_norm.loc[1,:].values), 'theta', 'r').redim(r=dict(range=(0,1))).opts(
             alpha=0.75, projection='polar', xticks=xticks, show_grid=True)
-            # alpha=0.75, projection='polar', xticks=xticks, show_grid=True, backend='matplotlib')
         
         theta_circle = np.linspace(0, 2 * np.pi, 100)
         for i in range(5):
@@ -2144,12 +2110,8 @@ def build_rose_diagram_from_query_selected_point(
                 scatter0 = scatter0 * scatter_temp
         
         rose_layout_hv = scatter0 * scatter1 * scatter2            
-            
-        with open('log_test.txt', 'a') as f:
-            f.write('end of ...\n')            
 
     else:
-        # print("RRR")
         df1 = pd.DataFrame([[0,0],[0,0],[0,0],[0,0],[0,0]], columns = ['Date','value'])
         label = "Nothing Selected"
         curve = hv.Curve(df1, "Date", "value").redim(r=dict(range=(0,1))).opts(
@@ -2159,10 +2121,7 @@ def build_rose_diagram_from_query_selected_point(
         #                                                text_color='#57504d', text_font_style='bold', height=300)
         rose_layout_hv = curve #* text
 
-        with open('log_test.txt', 'a') as f:
-            f.write("End of Else\n")
-       
-        
+      
     return rose_layout_hv  
     
 
