@@ -1937,7 +1937,17 @@ def build_hydrograph_from_query_selected_point(
             attribute_paths=attribute_paths,
             include_geometry=False,
         )      
-        df = convert_query_to_viz_units(df, units, 'streamflow')      
+        if len(df) == 0:
+            df = pd.DataFrame([[0,0],[1,0]], columns = ['Date','value'])
+            label = "No Data"
+            curve = hv.Curve(df, "Date", "value").opts(**opts)
+            text = hv.Text(0.01, 0.9, "No Data").opts(text_align='left', text_font_size='10pt', 
+                                                           text_color='#57504d', text_font_style='bold')
+            ts_layout = (curve * text).opts(show_title=False)
+            return ts_layout
+        
+        df = convert_query_to_viz_units(df, units, 'streamflow')  
+
         
         time_start = df['value_time'].min()
         time_end = df['value_time'].max()
